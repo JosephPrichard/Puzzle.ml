@@ -1,11 +1,15 @@
+type move = None | Left | Right | Up | Down
 type tile = Empty | One | Two | Three | Four | Five | Six | Seven | Eight
+type board = tile array
 type puzzle = { 
   parent: puzzle option;
-  tiles: tile array;
+  tiles: board;
   gscore: int; 
-  fscore: int 
+  fscore: int;
+  move: move;
 }
 type position = (int * int)
+type direction = (position * string)
 
 let size = 3 (* NxN size of the puzzle *)
 let goal_tiles = [|Empty; One; Two; Three; Four; Five; Six; Seven; Eight;|]
@@ -37,6 +41,13 @@ let tile_of_int int = match int with
   | 8 -> Eight
   | _ -> failwith (Printf.sprintf "Invalid integer %d for tile" int)
 
+let string_of_move = function
+  | None -> "None"
+  | Left -> "Left"
+  | Right -> "Right"
+  | Up -> "Up"
+  | Down -> "Down"
+
 let tile_of_string str =
   try tile_of_int (int_of_string str)
   with _ -> failwith (Printf.sprintf "Invalid str %s of tile" str) 
@@ -44,6 +55,8 @@ let tile_of_string str =
 let string_of_tile tile = string_of_int (int_of_tile tile)
 
 let in_bounds pos = let (row, col) = pos in row >= 0 && row < size && col >= 0 && col < size
+
+let in_bounds_direction direction = let (pos, _) = direction in in_bounds pos
 
 (* Gets the tile at a position on the tiles, raises an exception if the position is invalid *)
 let get_pos tiles pos =
@@ -74,16 +87,19 @@ let rec find_empty tiles i =
   else
     raise (Invalid_argument "Puzzle doesn't have an empty tile")
 
-(* Get the next positions conforming to a pattern relative to a position on the matrix - only containing positions within the boundary *)
-let next_positions pos = 
-  let (row, col) = pos in
-  let direction_to_pos direction = 
-    let (r, c) = direction in 
-    (col + r, row + c) 
+(* Get the adjacent positions conforming to a pattern relative to a position on the matrix - only containing positions within the boundary *)
+let adjacent_directions pos = 
+  let (og_row, og_col) = pos in
+
+  let do_move direction =
+    let ((r, c), move) = direction in 
+    ((og_row + r, og_col + c), move)
   in
-  List.filter in_bounds 
-    (List.map direction_to_pos 
-      [(1, 0); (0, 1); (-1, 0); (0, -1)])
+
+  List.filter 
+    in_bounds_direction
+    (List.map do_move
+      [((0, 1), Right); ((1, 0), Down); ((0, -1), Left); ((-1, 0), Up)])
 
 (* Swap two tiles on the tiles for the given positions *)
 let swap tiles pos_i pos_j =
@@ -91,14 +107,6 @@ let swap tiles pos_i pos_j =
     (set_pos tiles pos_i (get_pos tiles pos_j)) 
     pos_j 
     (get_pos tiles pos_i))
-
-(* Gets the swapped tiles for each next position relative to the provided position into an accumulator *)
-let rec next_tiles tiles provided_pos next_positions acc = 
-  match next_positions with 
-  | next_pos :: next_positions ->
-    next_tiles tiles provided_pos next_positions 
-      (swap tiles provided_pos next_pos :: acc)
-  | [] -> acc
 
 let manhattan_distance pos1 pos2 =
   let (row1, col1) = pos1 in
@@ -146,32 +154,51 @@ let rec tiles_of_number tiles i =
 (* Get the next puzzles for a given puzzle - each generated next puzzle will be linked to this puzzle as a child*)
 let next_puzzles puzzle =
   let empty_pos = find_empty puzzle.tiles 0 in
-  let tiles_acc = next_tiles puzzle.tiles empty_pos (next_positions empty_pos) [] in
-  (* Makes a new puzzle for each of the tiles in the tiles accumulator *)
-  let make_puzzle tiles =
-    let gscore = puzzle.gscore + 1 in
-    let fscore = gscore + calc_heurstic tiles in
-    {parent = Some puzzle; tiles = tiles; gscore = gscore; fscore = fscore} 
-  in
-  List.map make_puzzle tiles_acc
 
-let print_puzzle puzzle =
-  Printf.printf "Puzzle\nG: %d, F: %d\n" puzzle.gscore puzzle.fscore;
+  let rec next_puzzles directions acc = 
+    match directions with 
+    | direction :: directions ->
+      let (next_pos, move) = direction in
+      let tiles = swap puzzle.tiles empty_pos next_pos in
+
+      let gscore = puzzle.gscore + 1 in
+      let fscore = gscore + calc_heurstic tiles in
+      let puzzle = {parent = Some puzzle; tiles = tiles; gscore = gscore; fscore = fscore; move = move} in
+
+      next_puzzles directions (puzzle :: acc)
+    | [] -> acc
+  in  
+  next_puzzles (adjacent_directions empty_pos) []
+
+let print_tiles comb tiles = 
   let print_tile i tile =
-    let term = if (i+1) mod 3 == 0 then "\n" else " " in
+    let term = if (i+1) mod 3 == 0 then comb else " " in
     Printf.printf "%s" (string_of_tile tile ^ term);
     () 
   in
-  let () = Array.iteri print_tile puzzle.tiles in
-  Printf.printf "\n";
+  let () = Array.iteri print_tile tiles in
+  Printf.printf "\n"
 
-(* The ordered puzzles uses a key that sorts puzzles by heuristics *)
-module OrderedPuzzles = Map.Make(struct
-  type t = puzzle
-  let compare puzzle1 puzzle2 = puzzle1.fscore - puzzle2.fscore
-end) 
+let print_puzzle_dbg comb puzzle  =
+  Printf.printf "Puzzle\nG: %d, F: %d\n" puzzle.gscore puzzle.fscore;
+  print_tiles comb puzzle.tiles 
 
-(* Visited set to check if numbers exist in a set *)
+let print_puzzle puzzle  =
+  Printf.printf "%s\n" (string_of_move puzzle.move);
+  print_tiles "\n" puzzle.tiles 
+
+module OrderedPuzzles = Psq.Make(
+  struct
+    type t = int
+    let compare num1 num2 = num1 - num2
+  end
+)(
+  struct
+    type t = puzzle
+    let compare puzzle1 puzzle2 = puzzle1.fscore - puzzle2.fscore
+  end
+) 
+
 module VisitedSet = Map.Make(struct
   type t = int
   let compare num1 num2 = num1 - num2
@@ -181,41 +208,56 @@ let rec reconstruct_path puzzle path =
   let path = puzzle :: path in
   match puzzle.parent with 
   | Some parent -> reconstruct_path parent path
-  | None -> List.rev path
+  | None -> path
+
+let print_frontier frontier =
+  Printf.printf "Frontier %d\n" (OrderedPuzzles.size frontier);
+  OrderedPuzzles.iter (fun _ p -> print_puzzle_dbg " " p) frontier;
+  Printf.printf "\n"
+
+let print_visited visited =
+  Printf.printf "Visited %d\n" (VisitedSet.cardinal visited);
+  VisitedSet.iter (fun k _ -> Printf.printf "%d, " k;) visited;
+  Printf.printf "\n"
 
 let always _ = true
+
+let rec add_neighbors puzzles frontier visited =
+  (* Try to add the neighbor to frontier but only if it is not visited *)
+  match puzzles with
+  | puzzle :: puzzles ->
+    let key = (tiles_of_number puzzle.tiles 0) in
+    (* A neighbor can only be added into the frontier if it has not already been visited*)
+    (match VisitedSet.find_opt key visited with
+    | Some _ ->
+      add_neighbors puzzles frontier visited
+    | None ->
+      add_neighbors puzzles (OrderedPuzzles.add key puzzle frontier) visited)
+  | [] -> frontier
 
 let rec search frontier visited bound =
   if bound <= 0 then [] else
   (* Get the BEST puzzle from the frontier - no puzzle means we end the search with no solution *)
-  match OrderedPuzzles.find_first_opt always frontier with
-  | Some (puzzle, _) ->
-    print_puzzle puzzle;
-    let frontier = OrderedPuzzles.remove puzzle frontier in
+  match OrderedPuzzles.min frontier with
+  | Some (key, puzzle) ->
+    let frontier = OrderedPuzzles.remove key frontier in
     (* A puzzle must be removed from the frontier and added to visited set - we don't want to search it again *)
     let visited = VisitedSet.add (tiles_of_number puzzle.tiles 0) () visited in
     (* Check if the puzzle matches the goal solution *)
     if puzzle.tiles = goal_tiles then
       reconstruct_path puzzle []
     else
-      let rec add_neighbors puzzles frontier = 
-        (* Try to add the neighbor to frontier but only if it is not visited *)
-        match puzzles with
-        | puzzle :: puzzles -> 
-          (* A neighbor can only be added into the frontier if it has not already been visited*)
-          (match VisitedSet.find_opt (tiles_of_number puzzle.tiles 0) visited with 
-          | Some () -> add_neighbors puzzles frontier
-          | None -> add_neighbors puzzles (OrderedPuzzles.add puzzle () frontier))
-        | [] -> frontier
-      in
-      search (add_neighbors (next_puzzles puzzle) frontier) visited (bound-1)
+      let neighbors = next_puzzles puzzle in
+      let frontier = add_neighbors neighbors frontier visited in
+      search frontier visited (bound-1)
   | None -> []
     
 let solve tiles =
-  let root = {parent = None; tiles = tiles; gscore = 0; fscore = 0} in
-  let frontier = OrderedPuzzles.add root () OrderedPuzzles.empty in
+  let root = {parent = None; tiles = tiles; gscore = 0; fscore = 0; move = None} in
+  let root_key = tiles_of_number root.tiles 0 in
+  let frontier = OrderedPuzzles.add root_key root OrderedPuzzles.empty in
   let visited = VisitedSet.empty in
-  search frontier visited 50
+  search frontier visited max_int
 
 let rec print_solution path = 
   match path with
