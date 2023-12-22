@@ -18,6 +18,8 @@ let pos_of_index index = (index / size, index mod size)
 
 let index_of_pos (row, col) = row * size + col
 
+let str_of_pos (row, col) = Printf.sprintf "%d,%d" row col
+
 let int_of_tile = function
   | Empty -> 0
   | One -> 1
@@ -50,7 +52,7 @@ let string_of_move = function
 
 let tile_of_string str =
   try tile_of_int (int_of_string str)
-  with _ -> failwith (Printf.sprintf "Invalid str %s of tile" str) 
+  with _ -> failwith (Printf.sprintf "Invalid str %s of tile" str)
 
 let string_of_tile tile = string_of_int (int_of_tile tile)
 
@@ -60,23 +62,26 @@ let in_bounds_direction direction = let (pos, _) = direction in in_bounds pos
 
 (* Gets the tile at a position on the tiles, raises an exception if the position is invalid *)
 let get_pos tiles pos =
-  let i = index_of_pos pos in
-  if i < Array.length tiles && i >= 0 then
-    tiles.(i)
+  if in_bounds pos then
+    tiles.(index_of_pos pos)
   else 
     raise (Invalid_argument 
-      (Printf.sprintf "Cannot get index %i - is an invalid position" i))
+      (Printf.sprintf "Cannot get index %s - is an invalid position" 
+        (str_of_pos pos)))
 
 (* New tiles with the position at tiles set to the tile - raises an exception if the position is invalid *)
-let set_pos tiles pos tile =
-  let tiles = Array.copy tiles in
-  let i = index_of_pos pos in
-  if i < Array.length tiles && i >= 0 then
-    let () = tiles.(i) <- tile in
-    tiles
+let set_pos tiles pos new_tile =
+  if in_bounds pos then
+    let index = index_of_pos pos in
+    let to_tile i tile =
+      if i == index then new_tile
+      else tile
+    in
+    Array.mapi to_tile tiles
   else
     raise (Invalid_argument 
-      (Printf.sprintf "Cannot get index %i - is an invalid position" i))
+      (Printf.sprintf "Cannot set position %s - is an invalid position" 
+        (str_of_pos pos)))
 
 (* Search for empty tile on the tiles and return the position - raise exception if the empty tile doesn't exist - should NOT happen*)  
 let rec find_empty tiles i =
